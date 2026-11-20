@@ -1,1 +1,26 @@
-{"name":"コンサート・ライブ評価ノート","short_name":"ライブ評価","lang":"ja","start_url":"./","display":"standalone","theme_color":"#19264b","background_color":"#f1f5f9"}
+{
+  "name": "コンサート・ライブ評価ノート",
+  "short_name": "ライブ評価",
+  "lang": "ja",
+  "start_url": "./",
+  "display": "standalone",
+  "theme_color": "#19264b",
+  "background_color": "#f1f5f9",
+  "id": "./",
+  "description": "Googleカレンダーからコンサートとライブを取り込み、評価を記録するアプリ",
+  "scope": "./",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

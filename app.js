@@ -4,3 +4,20 @@ function clearForm(){$('form').reset();$('recordId').value=''}function editRecor
 $('form').onsubmit=ev=>{ev.preventDefault();const id=$('recordId').value||crypto.randomUUID();const old=records.find(x=>x.id===id)||{};const e={...old,id};for(const f of ['title','date','venue','artist','memo'])e[f]=$(f).value;for(const f of ['music','sound','stage','overall'])e[f]=Number($(f).value);const i=records.findIndex(x=>x.id===id);if(i>=0)records[i]=e;else records.push(e);save();render();clearForm();alert('保存しました')};$('clear').onclick=clearForm;$('add').onclick=()=>{clearForm();$('title').focus()};$('client').value=localStorage.getItem('google-client-id')||'';$('saveClient').onclick=()=>{localStorage.setItem('google-client-id',$('client').value.trim());$('status').textContent='クライアントIDを保存しました'};
 $('login').onclick=()=>{const clientId=$('client').value.trim();if(!clientId){alert('クライアントIDを入力してください');return}if(!window.google?.accounts?.oauth2){alert('Google認証の読み込みを待ってください');return}tokenClient=google.accounts.oauth2.initTokenClient({client_id:clientId,scope:'https://www.googleapis.com/auth/calendar.readonly',callback:r=>{if(r.error){$('status').textContent='認証エラー: '+r.error;return}token=r.access_token;$('status').textContent='接続しました。予定を同期しています';sync()}});tokenClient.requestAccessToken({prompt:'consent'})};
 async function sync(){if(!token){$('status').textContent='先にGoogleに接続してください';return}try{$('status').textContent='同期中…';let page='',count=0;const start=new Date();start.setFullYear(start.getFullYear()-5);do{const u=new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');u.searchParams.set('singleEvents','true');u.searchParams.set('maxResults','250');u.searchParams.set('timeMin',start.toISOString());if(page)u.searchParams.set('pageToken',page);const res=await fetch(u,{headers:{Authorization:'Bearer '+token}});if(!res.ok)throw Error('Google API '+res.status);const data=await res.json();for(const g of data.items||[]){if(g.status==='cancelled'||!/(コンサート|ライブ)/.test(g.summary||''))continue;const id='gcal-'+g.id;const date=(g.start?.dateTime||g.start?.date||'').slice(0,10);const e=records.find(x=>x.id===id);if(e){e.title=g.summary;e.date=date;e.venue=g.location||''}else{records.push({id,title:g.summary,date,venue:g.location||'',artist:'',source:'calendar'});count++}}page=data.nextPageToken||''}while(page);save();render();$('status').textContent='同期完了。新規 '+count+'件を追加しました'}catch(err){$('status').textContent='同期失敗: '+err.message}}$('sync').onclick=sync;document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)sync()});if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();
+
+// Excel-compatible UTF-8 CSV export. No data leaves the device.
+$('exportCsv').onclick=()=>{
+  if(!records.length){alert('出力する公演記録がありません。');return}
+  const cols=[['date','開催日'],['title','公演名'],['venue','会場'],['artist','出演者'],['music','演奏・歌唱'],['sound','音響'],['stage','演出'],['overall','総合満足度'],['memo','感想']];
+  const escapeCell=v=>{
+    let s=String(v??'');
+    // Avoid spreadsheet formula injection when opened in Excel.
+    if(/^[\s\uFEFF]*[=+@\-]/.test(s) && !/^-?\d+(?:\.\d+)?$/.test(s.trim()))s="'"+s;
+    return '"'+s.replace(/"/g,'""')+'"';
+  };
+  const sorted=[...records].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const lines=[cols.map(c=>escapeCell(c[1])).join(','),...sorted.map(e=>cols.map(c=>escapeCell(e[c[0]])).join(','))];
+  const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download='concert-ratings-'+new Date().toISOString().slice(0,10)+'.csv';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+};
