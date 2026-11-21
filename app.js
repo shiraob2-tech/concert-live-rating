@@ -53,8 +53,8 @@ $('readPhoto').onclick=async()=>{if(!activePhoto){alert('先に写真を選ん�
 // Printable, self-contained HTML notebook export. Existing CSV export is unchanged.
 function notebookEscape(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function photoDataUrl(blob){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob)})}
-async function notebookHTML(){
-  const sorted=[...records].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+async function notebookHTML(selectedRecords=records){
+  const sorted=[...selectedRecords].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   const sections=[];
   for(const e of sorted){
     let photo='';
