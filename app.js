@@ -99,36 +99,60 @@ async function openSingleNotebook(id){
 
 // Google Drive appDataFolder synchronization. No server credentials are embedded.
 // Existing localStorage + IndexedDB remain the source for offline access.
-const CLOUD_FILE='concert-rating-cloud-v1.json', CLOUD_ENABLED='concert-cloud-enabled-v1';
+const CLOUD_FILE='concert-rating-cloud-v1.json', CLOUD_ENABLED='concert-cloud-enabled-v2';
 let cloudBusy=false, cloudTimer=null, cloudDirty=false;
 const cloudMsg=s=>{$('cloudStatus').textContent=s};
 function scheduleCloudSync(){cloudDirty=true;if(!localStorage.getItem(CLOUD_ENABLED)||!token)return;clearTimeout(cloudTimer);cloudTimer=setTimeout(()=>runCloudSync(false).catch(console.warn),2500)}
-function asTime(r){return Date.parse(r?.updatedAt||'')||0}
-function recordFingerprint(r){const {updatedAt,...rest}=r;return JSON.stringify(rest)}
-function mergeRecords(remote){
- let changed=false,conflicts=0;const photoAlias={};const map=new Map(records.map(r=>[r.id,r]));
- for(const r of remote){
-  if(!r||typeof r!=='object'||typeof r.id!=='string')continue;
-  const old=map.get(r.id);
-  if(!old){records.push(r);map.set(r.id,r);changed=true;continue}
-  if(recordFingerprint(old)===recordFingerprint(r))continue;
-  // Never overwrite a different local version based solely on device clock timestamps.
-  // Preserve the remote version as a separate, stable conflict record.
-  const fingerprint=recordFingerprint(r);let hash=2166136261;
-  for(let i=0;i<fingerprint.length;i++)hash=Math.imul(hash^fingerprint.charCodeAt(i),16777619);
-  const conflictId='conflict-'+r.id+'-'+(hash>>>0).toString(36);
-  photoAlias[r.id]=conflictId;
-  if(map.has(conflictId))continue;
-  const duplicate={...r,id:conflictId,title:(r.title||'公演')+'（同期時の別バージョン）',updatedAt:r.updatedAt||new Date().toISOString()};
-  records.push(duplicate);map.set(conflictId,duplicate);conflicts++;changed=true;
+function canonicalId(id){const m=/^conflict-(gcal-.*)-[a-z0-9]+$/.exec(id||'');return m?m[1]:id}
+function hasValue(v){return v!==undefined&&v!==null&&v!==''&&!(Array.isArray(v)&&!v.length)}
+function combineRecord(local,remote){
+ const result={...local};
+ for(const [key,value] of Object.entries(remote)){
+  if(['id','updatedAt'].includes(key))continue;
+  if(key==='title'&&typeof value==='string'&&value.includes('（同期時の別バージョン）'))continue;
+  if(!hasValue(result[key])&&hasValue(value))result[key]=value;
  }
- return {changed,conflicts,photoAlias};
+ return result;
+}
+function normalizeRecords(list){
+ const map=new Map();
+ for(const entry of list){
+  if(!entry||typeof entry.id!=='string')continue;
+  const id=canonicalId(entry.id),r={...entry,id};
+  if(typeof r.title==='string')r.title=r.title.replace(/（同期時の別バージョン）/g,'');
+  if(!map.has(id))map.set(id,r);
+  else map.set(id,combineRecord(map.get(id),r));
+ }
+ return [...map.values()];
+}
+function mergeRecords(remote){
+ const previous=JSON.stringify(records);
+ records=normalizeRecords([...records,...remote]);
+ return {changed:previous!==JSON.stringify(records),conflicts:0,photoAlias:{}};
 }
 async function getAllPhotoData(){const out={};for(const r of records){try{const blob=await getStoredPhoto(r.id);if(blob instanceof Blob&&blob.type.startsWith('image/')&&blob.size<=12*1024*1024)out[r.id]=await photoDataUrl(blob)}catch(e){console.warn('写真のバックアップを省略',r.id,e)}}return out}
 function base64ToBlob(uri){const [prefix,data]=uri.split(',');if(!/^data:image\/(?:png|jpeg|webp|gif|bmp);base64$/i.test(prefix)||!data)throw Error('写真形式が不正です');const bin=atob(data),a=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);return new Blob([a],{type:prefix.slice(5,-7)})}
 async function createSnapshot(){return {schema:1,exportedAt:new Date().toISOString(),records:structuredClone(records),photos:await getAllPhotoData()}}
 async function downloadBackup(){const btn=$('backupAll');btn.disabled=true;try{const data=await createSnapshot();const blob=new Blob([JSON.stringify(data)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='concert-complete-backup-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);cloudMsg('完全バックアップをダウンロードしました。Googleドライブ等に保管してください。')}catch(e){cloudMsg('バックアップ失敗: '+e.message)}finally{btn.disabled=false}}
 $('backupAll').onclick=downloadBackup;
+$('repairBackup').onclick=()=>$('repairFile').click();
+$('repairFile').onchange=async ev=>{
+ const file=ev.target.files?.[0];if(!file)return;
+ try{
+  const data=JSON.parse(await file.text());
+  if(data.schema!==1||!Array.isArray(data.records)||!data.photos||typeof data.photos!=='object')throw Error('対応していないバックアップです');
+  if(!confirm('現在の公演一覧を修復済みバックアップの内容に置き換えます。両端末の元バックアップを保存済みですか？'))return;
+  const before=await createSnapshot();
+  const blob=new Blob([JSON.stringify(before)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');
+  link.href=url;link.download='concert-before-repair-'+Date.now()+'.json';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  records=normalizeRecords(data.records);
+  localStorage.setItem(KEY,JSON.stringify(records));
+  await mergeCloudPhotos(data.photos);
+  localStorage.removeItem(CLOUD_ENABLED);
+  render();cloudMsg('修復データを読み込みました：'+records.length+'公演。同期は停止中です。両端末で確認してください。');
+ }catch(e){alert('修復データの読み込みに失敗しました: '+e.message)}finally{ev.target.value=''}
+};
+
 $('restoreBackup').onclick=()=>$('backupFile').click();
 $('backupFile').onchange=async ev=>{const f=ev.target.files?.[0];if(!f)return;if(!confirm('バックアップを現在の記録に統合します。復元前に現在の端末の完全バックアップを保存しましたか？')){ev.target.value='';return}try{const data=JSON.parse(await f.text());if(data.schema!==1||!Array.isArray(data.records)||!data.photos||typeof data.photos!=='object')throw Error('対応していないバックアップ形式です');const {changed,conflicts,photoAlias}=mergeRecords(data.records);const photos=await mergeCloudPhotos(data.photos,photoAlias);if(changed){localStorage.setItem(KEY,JSON.stringify(records));render()}scheduleCloudSync();cloudMsg('復元・統合しました：写真 '+photos+'件、別バージョン '+conflicts+'件。必要なら今すぐ同期してください。')}catch(e){alert('復元できません: '+e.message)}finally{ev.target.value=''}};
 
@@ -149,7 +173,7 @@ async function writeCloudFile(file,snapshot,etag){
  const headers={'Content-Type':'multipart/related; boundary='+boundary};if(file&&etag)headers['If-Match']=etag;
  await driveRequest(u,{method:file?'PATCH':'POST',headers,body});
 }
-async function mergeCloudPhotos(remote,aliases={}){let count=0;for(const [remoteId,uri] of Object.entries(remote)){const id=aliases[remoteId]||remoteId;if(!records.some(r=>r.id===id)||typeof uri!=='string')continue;try{const existing=await getStoredPhoto(id);if(existing)continue;const blob=base64ToBlob(uri);if(blob.size>12*1024*1024)continue;await photoOperation('readwrite',id,blob);count++}catch(e){console.warn('写真同期を省略',id,e)}}return count}
+async function mergeCloudPhotos(remote,aliases={}){let count=0;for(const [remoteId,uri] of Object.entries(remote)){const id=canonicalId(aliases[remoteId]||remoteId);if(!records.some(r=>r.id===id)||typeof uri!=='string')continue;try{const existing=await getStoredPhoto(id);if(existing)continue;const blob=base64ToBlob(uri);if(blob.size>12*1024*1024)continue;await photoOperation('readwrite',id,blob);count++}catch(e){console.warn('写真同期を省略',id,e)}}return count}
 async function runCloudSync(manual=true){
  if(!token){cloudMsg('Googleへの接続が必要です。「Googleに接続」を押してください。');return}
  if(!localStorage.getItem(CLOUD_ENABLED)){cloudMsg('初回同期の設定が必要です');return}
@@ -166,7 +190,7 @@ async function runCloudSync(manual=true){
   if(changed){localStorage.setItem(KEY,JSON.stringify(records));render()}
   const snapshot=await createSnapshot();
   for(const [remoteId,uri] of Object.entries(remote.photos)){
-   const id=photoAlias[remoteId]||remoteId;
+   const id=canonicalId(photoAlias[remoteId]||remoteId);
    if(!snapshot.photos[id]&&records.some(r=>r.id===id))snapshot.photos[id]=uri;
   }
   // Do not upload identical data repeatedly; prevents unnecessary whole-file rewrites.
