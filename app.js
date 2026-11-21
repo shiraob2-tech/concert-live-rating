@@ -21,9 +21,9 @@ const sorted=[...matches].sort((a,b)=>{let n=0;
 for(const e of sorted){const box=document.createElement('div');box.className='event';const h=document.createElement('strong');h.textContent=e.title;box.append(h);const p=document.createElement('p');p.className='muted';p.textContent=[e.date,e.venue,e.artist].filter(Boolean).join(' / ');box.append(p);if(e.doorsOpen||e.showStart){const t=document.createElement('p');t.className='muted';t.textContent=[e.doorsOpen&&'開場 '+e.doorsOpen,e.showStart&&'開演 '+e.showStart].filter(Boolean).join(' ／ ');box.append(t)}const s=document.createElement('p');s.className='stars';s.textContent=e.overall?'★'.repeat(e.overall)+'☆'.repeat(5-e.overall):'未評価';box.append(s);if(Array.isArray(e.setlist)&&e.setlist.length){const songs=document.createElement('p');songs.className='muted';songs.textContent='セットリスト：'+e.setlist.length+'曲';box.append(songs)}const edit=document.createElement('button');edit.textContent='評価・編集';edit.onclick=()=>editRecord(e.id);box.append(edit);const note=document.createElement('button');note.className='secondary';note.textContent='📖 この公演のノート';note.onclick=()=>openSingleNotebook(e.id);box.append(note);const del=document.createElement('button');del.className='secondary';del.textContent='削除';del.onclick=()=>{if(confirm('この記録を削除しますか？')){deleteStoredPhoto(e.id).catch(console.warn);records=records.filter(x=>x.id!==e.id);save();render()}};box.append(del);list.append(box)}}
 for(const id of ['searchTitle','searchArtist','searchVenue','searchFrom','searchTo'])$(id).addEventListener('input',render);$('sortOrder').addEventListener('change',render);$('clearSearch').onclick=()=>{for(const id of ['searchTitle','searchArtist','searchVenue','searchFrom','searchTo'])$(id).value='';render()};
 function clearForm(){$('form').reset();$('recordId').value='';$('bulkSongs').value='';setSongs([]);resetPhotoEditor()}function editRecord(id){const e=records.find(x=>x.id===id);if(!e)return;$('recordId').value=e.id;for(const field of ['title','date','venue','artist','music','sound','stage','overall','memo','doorsOpen','showStart'])$(field).value=e[field]??(['memo','doorsOpen','showStart'].includes(field)?'':5);setSongs(Array.isArray(e.setlist)?e.setlist:[]);$('bulkSongs').value='';loadPhotoForRecord(e.id);$('form').scrollIntoView({behavior:'smooth'})}
-$('form').onsubmit=async ev=>{ev.preventDefault();const id=$('recordId').value||crypto.randomUUID();const old=records.find(x=>x.id===id)||{};const e={...old,id};for(const f of ['title','date','venue','artist','memo','doorsOpen','showStart'])e[f]=$(f).value;for(const f of ['music','sound','stage','overall'])e[f]=Number($(f).value);e.setlist=readSongs();e.updatedAt=new Date().toISOString();const i=records.findIndex(x=>x.id===id);if(i>=0)records[i]=e;else records.push(e);save();try{await persistPhotoForRecord(id);scheduleCloudSync()}catch(err){alert('評価は保存されましたが、写真の保存に失敗しました: '+err.message)}render();clearForm();alert('保存しました')};$('clear').onclick=clearForm;$('add').onclick=()=>{clearForm();$('title').focus()};$('client').value=localStorage.getItem('google-client-id')||'';$('saveClient').onclick=()=>{localStorage.setItem('google-client-id',$('client').value.trim());$('status').textContent='クライアントIDを保存しました'};
+$('form').onsubmit=async ev=>{ev.preventDefault();const same=records.filter(x=>String(x.id||'').startsWith('gcal-')&&concertMatchKey(x)===concertMatchKey({date:$('date').value,title:$('title').value}));const id=$('recordId').value||(same.length===1?same[0].id:crypto.randomUUID());const old=records.find(x=>x.id===id)||{};const e={...old,id};for(const f of ['title','date','venue','artist','memo','doorsOpen','showStart'])e[f]=$(f).value;for(const f of ['music','sound','stage','overall'])e[f]=Number($(f).value);e.setlist=readSongs();e.updatedAt=new Date().toISOString();const i=records.findIndex(x=>x.id===id);if(i>=0)records[i]=e;else records.push(e);save();try{await persistPhotoForRecord(id);scheduleCloudSync()}catch(err){alert('評価は保存されましたが、写真の保存に失敗しました: '+err.message)}render();clearForm();alert('保存しました')};$('clear').onclick=clearForm;$('add').onclick=()=>{clearForm();$('title').focus()};$('client').value=localStorage.getItem('google-client-id')||'';$('saveClient').onclick=()=>{localStorage.setItem('google-client-id',$('client').value.trim());$('status').textContent='クライアントIDを保存しました'};
 $('login').onclick=()=>{const clientId=$('client').value.trim();if(!clientId){alert('クライアントIDを入力してください');return}if(!window.google?.accounts?.oauth2){alert('Google認証の読み込みを待ってください');return}tokenClient=google.accounts.oauth2.initTokenClient({client_id:clientId,scope:'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/drive.appdata',callback:r=>{if(r.error){$('status').textContent='認証エラー: '+r.error;return}token=r.access_token;$('status').textContent='Googleに接続しました';$('cloudStatus').textContent='接続しました。初回は両端末のバックアップを保存してから「初回データ統合」を押してください。';sync();if(localStorage.getItem(CLOUD_ENABLED))runCloudSync(false)}});tokenClient.requestAccessToken({prompt:'consent'})};
-async function sync(){if(!token){$('status').textContent='先にGoogleに接続してください';return}try{$('status').textContent='同期中…';let page='',count=0;const start=new Date();start.setFullYear(start.getFullYear()-5);do{const u=new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');u.searchParams.set('singleEvents','true');u.searchParams.set('maxResults','250');u.searchParams.set('timeMin',start.toISOString());if(page)u.searchParams.set('pageToken',page);const res=await fetch(u,{headers:{Authorization:'Bearer '+token}});if(!res.ok)throw Error('Google API '+res.status);const data=await res.json();for(const g of data.items||[]){if(g.status==='cancelled'||!/(コンサート|ライブ)/.test(g.summary||''))continue;const id='gcal-'+g.id;const date=(g.start?.dateTime||g.start?.date||'').slice(0,10);const e=records.find(x=>x.id===id);if(e){if(e.title!==g.summary||e.date!==date||e.venue!==(g.location||'')){e.title=g.summary;e.date=date;e.venue=g.location||'';e.updatedAt=new Date().toISOString()}}else{records.push({id,title:g.summary,date,venue:g.location||'',artist:'',source:'calendar',updatedAt:new Date().toISOString()});count++}}page=data.nextPageToken||''}while(page);save();render();$('status').textContent='同期完了。新規 '+count+'件を追加しました'}catch(err){$('status').textContent='同期失敗: '+err.message}}$('sync').onclick=sync;document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)sync()});if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();
+async function sync(){if(!token){$('status').textContent='先にGoogleに接続してください';return}try{$('status').textContent='同期中…';let page='',count=0;const start=new Date();start.setFullYear(start.getFullYear()-5);do{const u=new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');u.searchParams.set('singleEvents','true');u.searchParams.set('maxResults','250');u.searchParams.set('timeMin',start.toISOString());if(page)u.searchParams.set('pageToken',page);const res=await fetch(u,{headers:{Authorization:'Bearer '+token}});if(!res.ok)throw Error('Google API '+res.status);const data=await res.json();for(const g of data.items||[]){if(g.status==='cancelled'||!/(コンサート|ライブ)/.test(g.summary||''))continue;const id='gcal-'+g.id;const date=(g.start?.dateTime||g.start?.date||'').slice(0,10);const matches=records.filter(x=>concertMatchKey(x)===concertMatchKey({date,title:g.summary}));const e=records.find(x=>x.id===id)||(matches.length===1?matches[0]:null);if(e){if(e.title!==g.summary||e.date!==date||e.venue!==(g.location||'')){if(!e.doorsOpen&&!e.showStart)e.title=g.summary;e.date=date;e.venue=g.location||'';e.updatedAt=new Date().toISOString()}}else{records.push({id,title:g.summary,date,venue:g.location||'',artist:'',source:'calendar',updatedAt:new Date().toISOString()});count++}}page=data.nextPageToken||''}while(page);records=normalizeRecords(records);save();render();$('status').textContent='同期完了。新規 '+count+'件を追加しました'}catch(err){$('status').textContent='同期失敗: '+err.message}}$('sync').onclick=sync;document.addEventListener('visibilitychange',()=>{if(!document.hidden&&token)sync()});if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});render();
 
 // Excel-compatible UTF-8 CSV export. No data leaves the device.
 $('exportCsv').onclick=()=>{
@@ -123,6 +123,28 @@ function combineRecord(local,remote){
  }
  return result;
 }
+// Match only an unambiguous manually-created copy to an existing calendar event.
+// Never merge two calendar events merely because their titles/dates match.
+function concertMatchKey(r){return String(r.date||'')+'\u0001'+String(r.title||'').replace(/（同期時の別バージョン）/g,'').trim().replace(/\s+/g,' ')}
+function dedupeCalendarTwins(list){
+ const groups=new Map();
+ for(const r of list){const key=concertMatchKey(r);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r)}
+ const remove=new Set();
+ for(const group of groups.values()){
+  const calendar=group.filter(r=>String(r.id||'').startsWith('gcal-'));
+  const manual=group.filter(r=>!String(r.id||'').startsWith('gcal-'));
+  if(calendar.length!==1||manual.length!==1||group.length!==2)continue;
+  const target=calendar[0],extra=manual[0];
+  // Preserve user edits even if the imported calendar record is newer.
+  const merged=combineRecord(target,extra);
+  for(const field of ['doorsOpen','showStart','memo','artist'])if(hasValue(extra[field]))merged[field]=extra[field];
+  if(Array.isArray(extra.setlist)&&extra.setlist.length)merged.setlist=extra.setlist;
+  for(const field of ['music','sound','stage','overall'])if(hasValue(extra[field]))merged[field]=extra[field];
+  Object.assign(target,merged,{id:target.id,source:'calendar'});
+  remove.add(extra);
+ }
+ return list.filter(r=>!remove.has(r));
+}
 function normalizeRecords(list){
  const map=new Map();
  for(const entry of list){
@@ -132,12 +154,13 @@ function normalizeRecords(list){
   if(!map.has(id))map.set(id,r);
   else map.set(id,combineRecord(map.get(id),r));
  }
- return [...map.values()];
+ return dedupeCalendarTwins([...map.values()]);
 }
 function mergeRecords(remote){
  const previous=JSON.stringify(records);
- records=normalizeRecords([...records,...remote]);
- return {changed:previous!==JSON.stringify(records),conflicts:0,photoAlias:{}};
+ const combined=[...records,...remote];records=normalizeRecords(combined);
+ const photoAlias={};for(const old of combined){if(!records.some(r=>r.id===old.id)){const matches=records.filter(r=>concertMatchKey(r)===concertMatchKey(old));if(matches.length===1)photoAlias[old.id]=matches[0].id}}
+ return {changed:previous!==JSON.stringify(records),conflicts:0,photoAlias};
 }
 async function driveRequest(url,opts={}){const res=await fetch(url,{...opts,headers:{Authorization:'Bearer '+token,...(opts.headers||{})}});if(!res.ok){const txt=(await res.text()).slice(0,250);throw Error('Google Drive API '+res.status+' '+txt)}return res}
 async function findCloudFile(){const u=new URL('https://www.googleapis.com/drive/v3/files');u.searchParams.set('spaces','appDataFolder');u.searchParams.set('q',"name = '"+CLOUD_FILE+"' and trashed = false");u.searchParams.set('fields','files(id,name),nextPageToken');u.searchParams.set('page_size','100');const res=await driveRequest(u);const data=await res.json();return data.files?.[0]||null}
@@ -173,6 +196,26 @@ function downloadSnapshot(snapshot){
  a.href=url;a.download='concert-complete-backup-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';
  document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
 }
+// Explicit restore of a verified complete backup. Never silently replace local records.
+$('restoreBackup').onclick=()=>{
+ const input=document.createElement('input');input.type='file';input.accept='.json,application/json';
+ input.onchange=async()=>{
+  if(!input.files?.length)return;
+  try{
+   const data=JSON.parse(await input.files[0].text());
+   if(data.schema!==1||!Array.isArray(data.records)||!data.photos||typeof data.photos!=='object')throw Error('完全バックアップの形式ではありません');
+   if(!confirm('現在の端末の記録を、選択したバックアップの'+data.records.length+'件に置き換えます。事前に現在の完全バックアップを保存しましたか？'))return;
+   records=normalizeRecords(data.records);
+   for(const [id,uri] of Object.entries(data.photos)){
+    if(!records.some(r=>r.id===id)||typeof uri!=='string')continue;
+    await photoOperation('readwrite',id,base64ToBlob(uri));
+   }
+   localStorage.setItem(KEY,JSON.stringify(records));render();scheduleCloudSync();
+   cloudMsg('復元完了：'+records.length+'公演。Google接続後に同期結果を確認してください。');
+  }catch(e){cloudMsg('復元できません: '+e.message)}
+ };
+ input.click();
+};
 $('backupAll').onclick=async()=>{
  try{downloadSnapshot(await createSnapshot());cloudMsg('端末の完全バックアップを保存しました。');}
  catch(e){cloudMsg('バックアップに失敗しました: '+e.message);}
