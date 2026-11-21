@@ -66,7 +66,8 @@ async function sync(){
     // Associate matched existing records with the calendar event for future deletion tracking.
     if(e.id!==id && !String(e.id).startsWith('gcal-'))e.id=id;
     if(e.title!==g.summary||e.date!==date||e.venue!==(g.location||'')){
-     if(!e.doorsOpen&&!e.showStart)e.title=g.summary;
+     // Keep user-entered times and reviews; only refresh the calendar title.
+     e.title=g.summary;
      e.date=date;e.venue=g.location||'';e.updatedAt=new Date().toISOString();
     }
    }else{
