@@ -156,6 +156,27 @@ async function writeCloudFile(file,snapshot,etag){
  const headers={'Content-Type':'multipart/related; boundary='+boundary};if(file&&etag)headers['If-Match']=etag;
  await driveRequest(u,{method:file?'PATCH':'POST',headers,body});
 }
+// Build the complete cloud/backup payload. The previous release called this function
+// without defining it, which caused "createSnapshot is not defined" on both devices.
+async function createSnapshot(){
+ const photos={};
+ for(const r of records){
+  if(!r||typeof r.id!=='string')continue;
+  const blob=await getStoredPhoto(r.id);
+  if(blob)photos[r.id]=await photoDataUrl(blob);
+ }
+ return {schema:1,exportedAt:new Date().toISOString(),records:JSON.parse(JSON.stringify(records)),photos};
+}
+function downloadSnapshot(snapshot){
+ const blob=new Blob([JSON.stringify(snapshot,null,2)],{type:'application/json;charset=utf-8'});
+ const url=URL.createObjectURL(blob),a=document.createElement('a');
+ a.href=url;a.download='concert-complete-backup-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';
+ document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
+$('backupAll').onclick=async()=>{
+ try{downloadSnapshot(await createSnapshot());cloudMsg('端末の完全バックアップを保存しました。');}
+ catch(e){cloudMsg('バックアップに失敗しました: '+e.message);}
+};
 async function mergeCloudPhotos(remote,aliases={}){let count=0;for(const [remoteId,uri] of Object.entries(remote)){const id=canonicalId(aliases[remoteId]||remoteId);if(!records.some(r=>r.id===id)||typeof uri!=='string')continue;try{const existing=await getStoredPhoto(id);if(existing)continue;const blob=base64ToBlob(uri);if(blob.size>12*1024*1024)continue;await photoOperation('readwrite',id,blob);count++}catch(e){console.warn('写真同期を省略',id,e)}}return count}
 async function runCloudSync(manual=true){
  if(!token){cloudMsg('Googleへの接続が必要です。「Googleに接続」を押してください。');return}
