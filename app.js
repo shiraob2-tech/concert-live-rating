@@ -105,12 +105,25 @@ const cloudMsg=s=>{$('cloudStatus').textContent=s};
 function scheduleCloudSync(){cloudDirty=true;if(!localStorage.getItem(CLOUD_ENABLED)||!token)return;clearTimeout(cloudTimer);cloudTimer=setTimeout(()=>runCloudSync(false).catch(console.warn),2500)}
 function asTime(r){return Date.parse(r?.updatedAt||'')||0}
 function recordFingerprint(r){const {updatedAt,...rest}=r;return JSON.stringify(rest)}
-function mergeRecords(remote){let changed=false,conflicts=0;const photoAlias={};const map=new Map(records.map(r=>[r.id,r]));for(const r of remote){if(!r||typeof r!=='object'||typeof r.id!=='string')continue;const old=map.get(r.id);if(!old){records.push(r);map.set(r.id,r);changed=true;continue}if(recordFingerprint(old)===recordFingerprint(r))continue;
- // A newer timestamp wins. Legacy same-ID conflicts are retained as separate entries.
- const a=asTime(old),b=asTime(r);
- if(a&&b&&a!==b){if(b>a){Object.assign(old,r);changed=true}continue}
- const fingerprint=recordFingerprint(r);let hash=2166136261;for(let i=0;i<fingerprint.length;i++)hash=Math.imul(hash^fingerprint.charCodeAt(i),16777619);const conflictId='conflict-'+r.id+'-'+(hash>>>0).toString(36);photoAlias[r.id]=conflictId;if(map.has(conflictId))continue;const duplicate={...r,id:conflictId,title:(r.title||'公演')+'（同期時の別バージョン）',updatedAt:new Date().toISOString()};records.push(duplicate);map.set(duplicate.id,duplicate);conflicts++;changed=true;
- }return {changed,conflicts,photoAlias}}
+function mergeRecords(remote){
+ let changed=false,conflicts=0;const photoAlias={};const map=new Map(records.map(r=>[r.id,r]));
+ for(const r of remote){
+  if(!r||typeof r!=='object'||typeof r.id!=='string')continue;
+  const old=map.get(r.id);
+  if(!old){records.push(r);map.set(r.id,r);changed=true;continue}
+  if(recordFingerprint(old)===recordFingerprint(r))continue;
+  // Never overwrite a different local version based solely on device clock timestamps.
+  // Preserve the remote version as a separate, stable conflict record.
+  const fingerprint=recordFingerprint(r);let hash=2166136261;
+  for(let i=0;i<fingerprint.length;i++)hash=Math.imul(hash^fingerprint.charCodeAt(i),16777619);
+  const conflictId='conflict-'+r.id+'-'+(hash>>>0).toString(36);
+  photoAlias[r.id]=conflictId;
+  if(map.has(conflictId))continue;
+  const duplicate={...r,id:conflictId,title:(r.title||'公演')+'（同期時の別バージョン）',updatedAt:r.updatedAt||new Date().toISOString()};
+  records.push(duplicate);map.set(conflictId,duplicate);conflicts++;changed=true;
+ }
+ return {changed,conflicts,photoAlias};
+}
 async function getAllPhotoData(){const out={};for(const r of records){try{const blob=await getStoredPhoto(r.id);if(blob instanceof Blob&&blob.type.startsWith('image/')&&blob.size<=12*1024*1024)out[r.id]=await photoDataUrl(blob)}catch(e){console.warn('写真のバックアップを省略',r.id,e)}}return out}
 function base64ToBlob(uri){const [prefix,data]=uri.split(',');if(!/^data:image\/(?:png|jpeg|webp|gif|bmp);base64$/i.test(prefix)||!data)throw Error('写真形式が不正です');const bin=atob(data),a=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);return new Blob([a],{type:prefix.slice(5,-7)})}
 async function createSnapshot(){return {schema:1,exportedAt:new Date().toISOString(),records:structuredClone(records),photos:await getAllPhotoData()}}
@@ -121,13 +134,61 @@ $('backupFile').onchange=async ev=>{const f=ev.target.files?.[0];if(!f)return;if
 
 async function driveRequest(url,opts={}){const res=await fetch(url,{...opts,headers:{Authorization:'Bearer '+token,...(opts.headers||{})}});if(!res.ok){const txt=(await res.text()).slice(0,250);throw Error('Google Drive API '+res.status+' '+txt)}return res}
 async function findCloudFile(){const u=new URL('https://www.googleapis.com/drive/v3/files');u.searchParams.set('spaces','appDataFolder');u.searchParams.set('q',"name = '"+CLOUD_FILE+"' and trashed = false");u.searchParams.set('fields','files(id,name),nextPageToken');u.searchParams.set('page_size','100');const res=await driveRequest(u);const data=await res.json();return data.files?.[0]||null}
-async function fetchCloudFile(id){const res=await driveRequest('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(id)+'?alt=media');const obj=await res.json();if(obj.schema!==1||!Array.isArray(obj.records)||typeof obj.photos!=='object'||obj.photos===null)throw Error('クラウドデータ形式が異なります');return obj}
-async function writeCloudFile(file,snapshot){const boundary='concert'+crypto.randomUUID().replace(/-/g,'');const metadata=file?{}:{name:CLOUD_FILE,parents:['appDataFolder'],mimeType:'application/json'};const body='--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(metadata)+'\r\n--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(snapshot)+'\r\n--'+boundary+'--\r\n';const u=file?'https://www.googleapis.com/upload/drive/v3/files/'+encodeURIComponent(file.id)+'?uploadType=multipart':'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';await driveRequest(u,{method:file?'PATCH':'POST',headers:{'Content-Type':'multipart/related; boundary='+boundary},body})}
+async function fetchCloudFile(id){
+ const res=await driveRequest('https://www.googleapis.com/drive/v3/files/'+encodeURIComponent(id)+'?alt=media');
+ const etag=res.headers.get('ETag');const obj=await res.json();
+ if(obj.schema!==1||!Array.isArray(obj.records)||typeof obj.photos!=='object'||obj.photos===null)throw Error('クラウドデータ形式が異なります');
+ return {data:obj,etag};
+}
+async function writeCloudFile(file,snapshot,etag){
+ const boundary='concert'+crypto.randomUUID().replace(/-/g,'');
+ const metadata=file?{}:{name:CLOUD_FILE,parents:['appDataFolder'],mimeType:'application/json'};
+ const body='--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(metadata)+'\r\n--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+JSON.stringify(snapshot)+'\r\n--'+boundary+'--\r\n';
+ const u=file?'https://www.googleapis.com/upload/drive/v3/files/'+encodeURIComponent(file.id)+'?uploadType=multipart':'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+ // If the server supplies an ETag, reject writes against a changed remote version.
+ const headers={'Content-Type':'multipart/related; boundary='+boundary};if(file&&etag)headers['If-Match']=etag;
+ await driveRequest(u,{method:file?'PATCH':'POST',headers,body});
+}
 async function mergeCloudPhotos(remote,aliases={}){let count=0;for(const [remoteId,uri] of Object.entries(remote)){const id=aliases[remoteId]||remoteId;if(!records.some(r=>r.id===id)||typeof uri!=='string')continue;try{const existing=await getStoredPhoto(id);if(existing)continue;const blob=base64ToBlob(uri);if(blob.size>12*1024*1024)continue;await photoOperation('readwrite',id,blob);count++}catch(e){console.warn('写真同期を省略',id,e)}}return count}
-async function runCloudSync(manual=true){if(!token){cloudMsg('先にGoogleに接続してください');return}if(!localStorage.getItem(CLOUD_ENABLED)){cloudMsg('先に「初回データ統合・自動同期を有効にする」を押してください');return}if(cloudBusy)return;cloudBusy=true;cloudMsg('同期中です。画面を閉じずにお待ちください…');try{const file=await findCloudFile();const remote=file?await fetchCloudFile(file.id):{schema:1,records:[],photos:{}};const {changed,conflicts,photoAlias}=mergeRecords(remote.records);const photosAdded=await mergeCloudPhotos(remote.photos,photoAlias);if(changed){localStorage.setItem(KEY,JSON.stringify(records));render()}
- const snapshot=await createSnapshot();for(const [remoteId,uri] of Object.entries(remote.photos)){const id=photoAlias[remoteId]||remoteId;if(!snapshot.photos[id]&&records.some(r=>r.id===id))snapshot.photos[id]=uri}
- await writeCloudFile(file,snapshot);cloudDirty=false;cloudMsg('同期完了：'+records.length+'公演、写真 '+Object.keys(snapshot.photos).length+'件'+(conflicts?'／異なる版 '+conflicts+'件を別記録として保護':'')+'。最終同期 '+new Date().toLocaleTimeString('ja-JP'));
- }catch(e){cloudMsg('同期できません: '+e.message+'。ローカルの記録は残っています。');console.error(e)}finally{cloudBusy=false;if(cloudDirty&&token)setTimeout(()=>runCloudSync(false),4000)}}
+async function runCloudSync(manual=true){
+ if(!token){cloudMsg('Googleへの接続が必要です。「Googleに接続」を押してください。');return}
+ if(!localStorage.getItem(CLOUD_ENABLED)){cloudMsg('初回同期の設定が必要です');return}
+ if(cloudBusy)return;
+ cloudBusy=true;cloudDirty=false;cloudMsg('同期中です。画面を閉じずにお待ちください…');
+ try{
+  const file=await findCloudFile();
+  const result=file?await fetchCloudFile(file.id):null;
+  const remote=result?result.data:{schema:1,records:[],photos:{}};
+  // Keep a safety snapshot of the pre-merge local records before changing local storage.
+  const before=JSON.stringify(records);
+  const {changed,conflicts,photoAlias}=mergeRecords(remote.records);
+  const photosAdded=await mergeCloudPhotos(remote.photos,photoAlias);
+  if(changed){localStorage.setItem(KEY,JSON.stringify(records));render()}
+  const snapshot=await createSnapshot();
+  for(const [remoteId,uri] of Object.entries(remote.photos)){
+   const id=photoAlias[remoteId]||remoteId;
+   if(!snapshot.photos[id]&&records.some(r=>r.id===id))snapshot.photos[id]=uri;
+  }
+  // Do not upload identical data repeatedly; prevents unnecessary whole-file rewrites.
+  const cloudComparable=JSON.stringify({records:remote.records,photos:remote.photos});
+  const localComparable=JSON.stringify({records:snapshot.records,photos:snapshot.photos});
+  if(cloudComparable!==localComparable)await writeCloudFile(file,snapshot,result?.etag);
+  cloudMsg('同期完了：'+records.length+'公演、写真 '+Object.keys(snapshot.photos).length+'件'+(conflicts?'／別バージョン '+conflicts+'件を保護':'')+'。最終同期 '+new Date().toLocaleTimeString('ja-JP'));
+ }catch(e){
+  const message=String(e.message||e);
+  if(/Google Drive API 401|Google Drive API 403/.test(message)){
+   token=null;cloudMsg('Google接続の期限切れ・権限エラーです。「Googleに接続」で再認証してください。同期は停止しました。');
+  }else if(/Google Drive API 412/.test(message)){
+   cloudMsg('別端末が先にクラウドを更新しました。上書きせず停止しました。再度「今すぐ同期」を押してください。');
+  }else cloudMsg('同期できません: '+message+'。元のバックアップは保管してください。');
+  console.error(e);
+ }finally{
+  cloudBusy=false;
+  if(cloudDirty&&token&&localStorage.getItem(CLOUD_ENABLED)){
+   clearTimeout(cloudTimer);cloudTimer=setTimeout(()=>runCloudSync(false),4000);
+  }
+ }
+}
 $('startCloud').onclick=async()=>{if(!token){alert('先にGoogleに接続してください');return}if(!confirm('AndroidとPCの両方で完全バックアップを保存しましたか？ 保存前なら「キャンセル」を押してください。'))return;localStorage.setItem(CLOUD_ENABLED,'1');await runCloudSync(true)};
 $('cloudNow').onclick=()=>runCloudSync(true);
 setInterval(()=>{if(token&&localStorage.getItem(CLOUD_ENABLED)&&!document.hidden)runCloudSync(false)},60000);
