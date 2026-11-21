@@ -8,3 +8,5 @@
 6. Google Driveに旧データが残っている可能性があります。同期の再開は両端末の確認後に行ってください。
 
 注意：同時編集の競合を完全に解消するクラウドサーバー側の検証は未実施です。評価が違う場合はローカル優先で保存します。写真は今回のバックアップに含まれていません。
+
+Auto sync fix: most recent updatedAt wins on conflicting nonempty fields; blank fields do not erase data.
