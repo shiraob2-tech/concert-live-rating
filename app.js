@@ -340,13 +340,18 @@ function openChatGPTSetlist(record){
  const overlay=document.createElement('div');overlay.id='chatgptPromptDialog';overlay.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:12px';
  const panel=document.createElement('div');panel.style.cssText='background:white;color:#172033;border-radius:14px;padding:18px;width:min(620px,100%);max-height:90vh;overflow:auto;box-sizing:border-box';panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','ChatGPTへの質問文');
  const heading=document.createElement('h3');heading.textContent='ChatGPTでセットリストを検索';
- const info=document.createElement('p');info.textContent='「質問文入りで開く」を試せます。入力されない場合は、下の質問文をコピーして貼り付けてください。';
+ const info=document.createElement('p');info.textContent='質問文を入力したChatGPTを開きます。うまく入力されない場合は「手動でコピーする（予備）」を開いてください。';
  const area=document.createElement('textarea');area.value=prompt;area.readOnly=true;area.rows=9;area.style.cssText='width:100%;box-sizing:border-box;font-size:16px';area.setAttribute('aria-label','ChatGPTへの質問文');
- const status=document.createElement('p');status.style.cssText='font-size:14px;color:#475569';
- const copy=document.createElement('button');copy.type='button';copy.textContent='① 質問文をコピー';
- copy.onclick=async()=>{area.focus();area.select();try{if(!navigator.clipboard?.writeText||!window.isSecureContext)throw Error('手動コピー');await navigator.clipboard.writeText(prompt);status.textContent='コピーしました。次に「ChatGPTを開く」を押してください。'}catch{status.textContent='質問文を選択しました。パソコンは Ctrl+C、Androidは長押しして「コピー」を選んでください。'}};
- const open=document.createElement('button');open.type='button';open.textContent='② ChatGPTを開く';open.onclick=()=>{const tab=window.open('https://chatgpt.com/','_blank');if(!tab)status.textContent='ChatGPTを開けませんでした。ポップアップを許可するか、chatgpt.com を手動で開いてください。'};
- const prefill=document.createElement('button');prefill.type='button';prefill.textContent='✨ 質問文入りで開く（試験機能）';prefill.onclick=()=>{const url='https://chatgpt.com/?q='+encodeURIComponent(prompt);const tab=window.open(url,'_blank','noopener,noreferrer');if(!tab)status.textContent='新しいタブを開けませんでした。ポップアップを許可してください。';else status.textContent='ChatGPTが質問文を受け付けない場合は「① 質問文をコピー」→「② ChatGPTを開く」を使用してください。';};
+ const status=document.createElement('p');status.style.cssText='font-size:14px;color:#475569';status.setAttribute('role','status');
+ const prefill=document.createElement('button');prefill.type='button';prefill.textContent='✨ 質問文入りでChatGPTを開く';prefill.onclick=()=>{const url='https://chatgpt.com/?q='+encodeURIComponent(prompt);const tab=window.open(url,'_blank');if(!tab)status.textContent='ChatGPTを開けませんでした。ポップアップを許可してください。';else status.textContent='質問文が表示されない場合は、下の「手動でコピーする（予備）」をご利用ください。';};
+ const backup=document.createElement('details');backup.style.cssText='margin:12px 0;padding:12px;border:1px solid #cbd5e1;border-radius:9px;background:#f8fafc';
+ const summary=document.createElement('summary');summary.textContent='手動でコピーする（予備）';summary.style.cssText='cursor:pointer;font-weight:600';
+ const guidance=document.createElement('p');guidance.className='muted';guidance.textContent='自動入力できない場合のみ使います。質問文をコピーしてからChatGPTを開き、入力欄に貼り付けてください。';
+ const copy=document.createElement('button');copy.type='button';copy.className='secondary';copy.textContent='質問文をコピー';
+ copy.onclick=async()=>{area.focus();area.select();try{if(!navigator.clipboard?.writeText||!window.isSecureContext)throw Error('手動コピー');await navigator.clipboard.writeText(prompt);status.textContent='コピーしました。ChatGPTを開いて貼り付けてください。'}catch{status.textContent='質問文を選択しました。パソコンは Ctrl+C、Androidは長押しして「コピー」を選んでください。'}};
+ const open=document.createElement('a');open.href='https://chatgpt.com/';open.target='_blank';open.rel='noopener noreferrer';open.textContent='ChatGPTを開く（貼り付け用）';open.style.cssText='display:inline-block;margin:8px;color:#2458bd';
+ backup.append(summary,guidance,area,copy,open);
  const close=document.createElement('button');close.type='button';close.className='secondary';close.textContent='閉じる';close.onclick=()=>overlay.remove();
- panel.append(heading,info,area,status,prefill,copy,open,close);overlay.append(panel);document.body.append(overlay);area.focus();area.select();
+ panel.append(heading,info,prefill,backup,status,close);overlay.append(panel);document.body.append(overlay);
+
 }
