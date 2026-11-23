@@ -336,10 +336,16 @@ if(localStorage.getItem(CLOUD_ENABLED))cloudMsg('自動同期設定済み。Goog
 function openChatGPTSetlist(record){
  const details=[record.title&&'公演名：'+record.title,record.date&&'開催日：'+record.date,record.venue&&'会場：'+record.venue,record.artist&&'出演者：'+record.artist].filter(Boolean).join('\n');
  const prompt='次の公演の実際の演奏曲目（セットリスト）を、公開情報を調べて教えてください。\n'+details+'\n曲名・演奏順・作曲者が確認できれば整理し、情報源のURLを示してください。別の日や別会場の公演と混同せず、確認できない曲目は推測で補わず「未確認」と明記してください。';
- const tab=window.open('https://chatgpt.com/','_blank','noopener,noreferrer');
- const fallback=()=>window.prompt('以下の質問文をコピーして、ChatGPTの入力欄に貼り付けてください。',prompt);
- if(navigator.clipboard&&window.isSecureContext){
-  navigator.clipboard.writeText(prompt).then(()=>alert('ChatGPTを開きました。質問文をコピーしたので、ChatGPTの入力欄に貼り付けて送信してください。')).catch(fallback);
- }else fallback();
- if(!tab)alert('ChatGPTが開かない場合は、ポップアップを許可するか https://chatgpt.com/ を開いてください。');
+ document.getElementById('chatgptPromptDialog')?.remove();
+ const overlay=document.createElement('div');overlay.id='chatgptPromptDialog';overlay.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;padding:12px';
+ const panel=document.createElement('div');panel.style.cssText='background:white;color:#172033;border-radius:14px;padding:18px;width:min(620px,100%);max-height:90vh;overflow:auto;box-sizing:border-box';panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');panel.setAttribute('aria-label','ChatGPTへの質問文');
+ const heading=document.createElement('h3');heading.textContent='ChatGPTでセットリストを検索';
+ const info=document.createElement('p');info.textContent='下の質問文をコピーしてからChatGPTを開き、入力欄に貼り付けてください。';
+ const area=document.createElement('textarea');area.value=prompt;area.readOnly=true;area.rows=9;area.style.cssText='width:100%;box-sizing:border-box;font-size:16px';area.setAttribute('aria-label','ChatGPTへの質問文');
+ const status=document.createElement('p');status.style.cssText='font-size:14px;color:#475569';
+ const copy=document.createElement('button');copy.type='button';copy.textContent='① 質問文をコピー';
+ copy.onclick=async()=>{area.focus();area.select();try{if(!navigator.clipboard?.writeText||!window.isSecureContext)throw Error('手動コピー');await navigator.clipboard.writeText(prompt);status.textContent='コピーしました。次に「ChatGPTを開く」を押してください。'}catch{status.textContent='質問文を選択しました。パソコンは Ctrl+C、Androidは長押しして「コピー」を選んでください。'}};
+ const open=document.createElement('button');open.type='button';open.textContent='② ChatGPTを開く';open.onclick=()=>{const tab=window.open('https://chatgpt.com/','_blank');if(!tab)status.textContent='ChatGPTを開けませんでした。ポップアップを許可するか、chatgpt.com を手動で開いてください。'};
+ const close=document.createElement('button');close.type='button';close.className='secondary';close.textContent='閉じる';close.onclick=()=>overlay.remove();
+ panel.append(heading,info,area,status,copy,open,close);overlay.append(panel);document.body.append(overlay);area.focus();area.select();
 }
