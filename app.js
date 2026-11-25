@@ -114,6 +114,13 @@ const deleteStoredPhoto=id=>photoOperation('readwrite',id,null);
 let gallery=[], galleryDirty=false, galleryBusy=false;
 async function galleryItems(value){if(Array.isArray(value))return value;if(value instanceof Blob)return [{id:'legacy',src:await photoDataUrl(value),comment:'',updatedAt:'1970-01-01T00:00:00.000Z'}];return []}
 function mergeGallery(a,b){const m=new Map();for(const x of [...a,...b])if(x&&x.id&&(!m.has(x.id)||String(x.updatedAt)>String(m.get(x.id).updatedAt)))m.set(x.id,x);return [...m.values()].sort((a,b)=>a.id.localeCompare(b.id))}
+function base64ToBlob(uri){
+ const match=/^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]*)$/i.exec(uri);
+ if(!match)throw Error('写真データの形式が異なります');
+ const raw=atob(match[2]);const bytes=new Uint8Array(raw.length);
+ for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+ return new Blob([bytes],{type:match[1]});
+}
 async function decodeGallery(v){return typeof v==='string'?galleryItems(base64ToBlob(v)):Array.isArray(v)?v:[]}
 function showGallery(){const root=$('photoGallery');root.replaceChildren();for(const item of gallery.filter(x=>!x.deleted)){const card=document.createElement('div');card.className='photo-card';const img=document.createElement('img');img.src=item.src;img.alt='公演写真';img.onclick=()=>{const d=$('photoZoom');$('zoomImage').src=item.src;d.showModal()};const comment=document.createElement('input');comment.placeholder='写真のコメント';comment.value=item.comment||'';comment.oninput=()=>{item.comment=comment.value;item.updatedAt=new Date().toISOString();galleryDirty=true};const del=document.createElement('button');del.type='button';del.className='secondary';del.textContent='削除';del.onclick=()=>{if(confirm('この写真を削除しますか？')){item.deleted=true;delete item.src;delete item.comment;item.updatedAt=new Date().toISOString();galleryDirty=true;showGallery()}};card.append(img,comment,del);root.append(card)}$('photoStatus').textContent=gallery.filter(x=>!x.deleted).length+'枚 ／ 保存ボタンで確定します'}
 function resetPhotoEditor(){photoLoadSequence++;gallery=[];galleryDirty=false;galleryBusy=false;$('setlistPhoto').value='';$('cameraPhoto').value='';showGallery()}

@@ -1,5 +1,5 @@
 // Update cache version when deploying app changes.
-const CACHE='concert-notes-v20261125-gallery1';
+const CACHE='concert-notes-v20261125-gallery2';
 const ASSETS=['./','./index.html','./app.js','./manifest.webmanifest'];
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('concert-notes-')&&key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim()))});
