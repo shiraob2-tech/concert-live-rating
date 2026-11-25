@@ -95,6 +95,18 @@ async function sync(){
    const extra=records.find(x=>x.id==='gcal-'+g.id&&x.id!==r.id);
    if(extra){const merged=combineRecord(extra,r);Object.assign(r,merged,{id:r.id,calendarPublish:true,calendarEventId:g.id,showEnd:r.showEnd,updatedAt:new Date().toISOString()});const photos=mergeGallery(await galleryItems(await getStoredPhoto(r.id)),await galleryItems(await getStoredPhoto(extra.id)));if(photos.length)await photoOperation('readwrite',r.id,photos);markDeleted(extra.id);records=records.filter(x=>x.id!==extra.id);save()}
   }
+  // Confirm deletion by exact previously linked event ID, before any writes.
+  const deletedPublished=[];
+  for(const r of records.filter(x=>x.calendarPublish&&x.calendarEventId&&x.calendarSynced)){
+   const linked=calendarEvents.find(g=>g.id===r.calendarEventId&&g.status!=='cancelled');
+   if(linked)continue;
+   const res=await fetch(CAL_URL+'/'+encodeURIComponent(r.calendarEventId),{headers:{Authorization:'Bearer '+token}});
+   if(res.status===404||res.status===410){deletedPublished.push(r);continue}
+   if(!res.ok)throw Error('登録済み予定の確認 '+res.status);
+   const g=await res.json();if(g.status==='cancelled')deletedPublished.push(r);
+  }
+  for(const r of deletedPublished){markDeleted(r.id);markDeleted('gcal-'+r.calendarEventId);removed++;}
+  if(deletedPublished.length){const ids=new Set(deletedPublished.flatMap(r=>[r.id,'gcal-'+r.calendarEventId]));records=records.filter(r=>!ids.has(r.id));save();}
   const errors=[];for(const r of [...records])if(r.calendarPublish&&r.date){try{await calendarWrite(r,calendarEvents)}catch(e){errors.push(e.message)}}
   const present=new Set();
   for(const g of calendarEvents){
