@@ -41,16 +41,18 @@ function calendarPayload(r){
  return {summary:r.title,location:r.venue||'',description:r.doorsOpen?'開場 '+r.doorsOpen:'',start,end,extendedProperties:{private:{concertRecord:r.id}}};
 }
 async function calendarWrite(r,events){
- const body=calendarPayload(r),signature=JSON.stringify(body);if(r.calendarSynced===signature)return;
- const id=calendarId(r);const matches=events.filter(g=>g.status!=='cancelled'&&g.id!==id&&concertMatchKey({date:(g.start?.dateTime||g.start?.date||'').slice(0,10),title:g.summary})===concertMatchKey(r));
+ const body=calendarPayload(r),signature=JSON.stringify(body);if(r.calendarSynced===signature&&r.calendarEventId)return;
+ const owned=events.filter(g=>g.status!=='cancelled'&&(g.id===calendarId(r)||g.extendedProperties?.private?.concertRecord===r.id||(r.calendarEventId&&g.id===r.calendarEventId)));
+ if(owned.length>1)throw Error('関連する予定が複数あります: '+r.title);
+ const id=owned[0]?.id||r.calendarEventId||calendarId(r);const matches=events.filter(g=>g.status!=='cancelled'&&g.id!==id&&concertMatchKey({date:(g.start?.dateTime||g.start?.date||'').slice(0,10),title:g.summary})===concertMatchKey(r));
  const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
  const url=CAL_URL+'/'+id;
  let res=await fetch(url,{headers});
- if(res.ok){const existing=await res.json();if(existing.extendedProperties?.private?.concertRecord!==r.id)throw Error('予定IDの競合');res=await fetch(url,{method:'PATCH',headers,body:JSON.stringify(body)})}
+ if(res.ok){const existing=await res.json();if(existing.extendedProperties?.private?.concertRecord!==r.id&&!(r.calendarEventId===existing.id&&String(existing.id).startsWith('concert')&&existing.extendedProperties?.private?.concertRecord))throw Error('予定IDの競合');res=await fetch(url,{method:'PATCH',headers,body:JSON.stringify(body)})}
  else if(res.status===404&&!r.calendarSynced){if(matches.length)throw Error('同名・同日の予定が既にあります: '+r.title+'（重複防止のため登録保留）');res=await fetch(CAL_URL,{method:'POST',headers,body:JSON.stringify({...body,id})});if(res.status===409)throw Error('別端末が登録中です。再同期してください')}
  else throw Error('予定確認 '+res.status+'（削除済みの予定は自動復元しません）');
  if(!res.ok)throw Error('カレンダー書き込み '+res.status);
- const current=records.find(x=>x.id===r.id);if(current){current.calendarSynced=signature;save()}
+ const written=await res.json();const current=records.find(x=>x.id===r.id);if(current){current.calendarEventId=written.id||id;current.calendarSynced=signature;save()}
 }
 async function sync(){
  if(!token){$('status').textContent='先にGoogleに接続してください';return}
@@ -74,6 +76,25 @@ async function sync(){
    calendarEvents.push(...data.items);
    page=data.nextPageToken||'';
   }while(page);
+  // Recover the known test pair only when the remote event is uniquely app-owned.
+  const test=records.filter(r=>r.title==='コンサート同期テスト'&&r.date==='2026-11-26');
+  const testRemote=calendarEvents.filter(g=>g.status!=='cancelled'&&g.summary==='コンサート同期テスト'&&(g.start?.dateTime||g.start?.date||'').slice(0,10)==='2026-11-26'&&g.location==='テスト会場'&&String(g.id).startsWith('concert')&&g.extendedProperties?.private?.concertRecord);
+  if(test.length===2&&testRemote.length===1){
+   const keep=test.find(r=>r.showEnd==='21:00'),extra=test.find(r=>r.showEnd==='20:30');
+   if(keep&&extra){
+    const merged=combineRecord(extra,keep);Object.assign(keep,merged,{id:keep.id,calendarPublish:true,calendarEventId:testRemote[0].id,calendarSynced:'',showEnd:'21:00',updatedAt:new Date().toISOString()});
+    const photos=mergeGallery(await galleryItems(await getStoredPhoto(keep.id)),await galleryItems(await getStoredPhoto(extra.id)));
+    if(photos.length)await photoOperation('readwrite',keep.id,photos);
+    markDeleted(extra.id);records=records.filter(r=>r.id!==extra.id);save();
+   }
+  }
+  // Merge only an exact imported ID of an owned event, never title/date alone.
+  for(const r of [...records].filter(x=>x.calendarPublish)){
+   const g=calendarEvents.find(x=>x.status!=='cancelled'&&(x.extendedProperties?.private?.concertRecord===r.id||x.id===calendarId(r)||x.id===r.calendarEventId));
+   if(!g)continue;
+   const extra=records.find(x=>x.id==='gcal-'+g.id&&x.id!==r.id);
+   if(extra){const merged=combineRecord(extra,r);Object.assign(r,merged,{id:r.id,calendarPublish:true,calendarEventId:g.id,showEnd:r.showEnd,updatedAt:new Date().toISOString()});const photos=mergeGallery(await galleryItems(await getStoredPhoto(r.id)),await galleryItems(await getStoredPhoto(extra.id)));if(photos.length)await photoOperation('readwrite',r.id,photos);markDeleted(extra.id);records=records.filter(x=>x.id!==extra.id);save()}
+  }
   const errors=[];for(const r of [...records])if(r.calendarPublish&&r.date){try{await calendarWrite(r,calendarEvents)}catch(e){errors.push(e.message)}}
   const present=new Set();
   for(const g of calendarEvents){
@@ -100,7 +121,7 @@ async function sync(){
   }
   // Only calendar-sourced records inside the fetched time range are eligible.
   // Older history and manually entered concerts are never automatically deleted.
-  const missing=records.filter(r=>String(r.id||'').startsWith('gcal-')&&r.date>=startDate&&!present.has(r.id));
+  const missing=records.filter(r=>!r.calendarPublish&&String(r.id||'').startsWith('gcal-')&&r.date>=startDate&&!present.has(r.id));
   for(const r of missing){markDeleted(r.id);deleteStoredPhoto(r.id).catch(console.warn);removed++}
   if(missing.length){const missingIds=new Set(missing.map(r=>r.id));records=records.filter(r=>!missingIds.has(r.id))}
   records=normalizeRecords(records).filter(r=>!isDeleted(r.id));
