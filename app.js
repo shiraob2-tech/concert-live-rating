@@ -43,12 +43,11 @@ function calendarPayload(r){
 async function calendarWrite(r,events){
  const body=calendarPayload(r),signature=JSON.stringify(body);if(r.calendarSynced===signature)return;
  const id=calendarId(r);const matches=events.filter(g=>g.status!=='cancelled'&&g.id!==id&&concertMatchKey({date:(g.start?.dateTime||g.start?.date||'').slice(0,10),title:g.summary})===concertMatchKey(r));
- if(matches.length&&!r.calendarSynced)throw Error('同名・同日の予定が既にあります: '+r.title+'（重複防止のため登録保留）');
  const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
  const url=CAL_URL+'/'+id;
  let res=await fetch(url,{headers});
  if(res.ok){const existing=await res.json();if(existing.extendedProperties?.private?.concertRecord!==r.id)throw Error('予定IDの競合');res=await fetch(url,{method:'PATCH',headers,body:JSON.stringify(body)})}
- else if(res.status===404&&!r.calendarSynced){res=await fetch(CAL_URL,{method:'POST',headers,body:JSON.stringify({...body,id})});if(res.status===409)throw Error('別端末が登録中です。再同期してください')}
+ else if(res.status===404&&!r.calendarSynced){if(matches.length)throw Error('同名・同日の予定が既にあります: '+r.title+'（重複防止のため登録保留）');res=await fetch(CAL_URL,{method:'POST',headers,body:JSON.stringify({...body,id})});if(res.status===409)throw Error('別端末が登録中です。再同期してください')}
  else throw Error('予定確認 '+res.status+'（削除済みの予定は自動復元しません）');
  if(!res.ok)throw Error('カレンダー書き込み '+res.status);
  const current=records.find(x=>x.id===r.id);if(current){current.calendarSynced=signature;save()}
